@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Annotated, Literal
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import BackgroundTasks, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -342,53 +342,43 @@ def delete_alert(
 # ----- Cron job pour les alertes -----
 
 
-@app.post("/api/cron/check-alerts")
-def check_alerts(
-    authorization: Annotated[str | None, Header()] = None,
-) -> dict:
-    """Endpoint cron : verifier les alertes actives et envoyer les emails.
+def _run_alert_scan() -> None:
+    """Le vrai scan, execute en background apres que la requete HTTP soit close.
 
-    Securise par un header Authorization: Bearer <CRON_SECRET>.
-    A trigger via Railway cron / cron-job.org / Vercel cron quotidiennement.
+    Logge dans stdout (visible dans Railway logs). Pas de retour HTTP : ce
+    n'est qu'apres que cron-job.org a deja recu son 202 Accepted.
     """
-    token = _extract_jwt(authorization)
-    if not CRON_SECRET or token != CRON_SECRET:
-        raise HTTPException(status_code=403, detail="Secret cron invalide.")
-
     admin = get_admin_client()
 
-    # Recupere toutes les alertes actives
     try:
         alerts_res = (
             admin.table("user_alerts").select("*").eq("active", True).execute()
         )
     except Exception as e:
-        return {"error": f"DB read alerts: {e}", "processed": 0}
+        print(f"[cron] Failed to read alerts: {e}")
+        return
 
     alerts = alerts_res.data or []
-    processed = 0
-    emails_sent = 0
-    new_listings_total = 0
+    print(f"[cron] Scanning {len(alerts)} active alerts")
 
     for alert in alerts:
-        # Recupere user email
         try:
             user = admin.auth.admin.get_user_by_id(alert["user_id"]).user
             user_email = user.email if user else None
-        except Exception:
-            user_email = None
+        except Exception as e:
+            print(f"[cron] Cant get user {alert['user_id']}: {e}")
+            continue
         if not user_email:
             continue
 
-        # Search Immoweb
         listings = alerts_scraper.search_listings(
             alert["city"],
             alert["max_price"],
             alert["min_bedrooms"],
             alert["property_type"],
         )
+        print(f"[cron] Alert '{alert.get('label')}': {len(listings)} listings found")
 
-        # Filtre les biens deja notifies
         try:
             notified_rows = (
                 admin.table("alert_notifications")
@@ -396,19 +386,20 @@ def check_alerts(
                 .eq("alert_id", alert["id"])
                 .execute()
             )
-            already_notified = {r["listing_url"] for r in (notified_rows.data or [])}
+            already_notified = {
+                r["listing_url"] for r in (notified_rows.data or [])
+            }
         except Exception:
             already_notified = set()
 
         new_listings = [
             l for l in listings if l["url"] not in already_notified
-        ][:10]  # max 10 par email
+        ][:10]
 
         if not new_listings:
-            processed += 1
+            print(f"[cron] Alert '{alert.get('label')}': no new listings")
             continue
 
-        # Insert notifications
         for listing in new_listings:
             try:
                 admin.table("alert_notifications").insert(
@@ -421,20 +412,50 @@ def check_alerts(
                         "listing_address": listing.get("address"),
                     }
                 ).execute()
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[cron] Insert notification failed: {e}")
 
-        # Envoie email
         sent = email_sender.send_alert_email(
             user_email, alert.get("label", "alerte"), new_listings
         )
-        if sent:
-            emails_sent += 1
-        new_listings_total += len(new_listings)
-        processed += 1
+        print(
+            f"[cron] Alert '{alert.get('label')}': "
+            f"{len(new_listings)} new, email sent={sent}"
+        )
+
+
+@app.post("/api/cron/check-alerts")
+def check_alerts(
+    background_tasks: BackgroundTasks,
+    authorization: Annotated[str | None, Header()] = None,
+) -> dict:
+    """Cron endpoint : repond immediatement, fait le scan en background.
+
+    Securise par Authorization: Bearer <CRON_SECRET>.
+    Retour rapide < 1s pour ne pas timeout sur cron-job.org (free 30s limit).
+    Le vrai travail (scrape Immoweb + envoi emails) tourne dans BackgroundTasks
+    apres que la response HTTP est envoyee.
+    """
+    token = _extract_jwt(authorization)
+    if not CRON_SECRET or token != CRON_SECRET:
+        raise HTTPException(status_code=403, detail="Secret cron invalide.")
+
+    admin = get_admin_client()
+    try:
+        count_res = (
+            admin.table("user_alerts")
+            .select("id", count="exact")
+            .eq("active", True)
+            .execute()
+        )
+        active_count = count_res.count or 0
+    except Exception:
+        active_count = -1
+
+    background_tasks.add_task(_run_alert_scan)
 
     return {
-        "processed_alerts": processed,
-        "emails_sent": emails_sent,
-        "new_listings_total": new_listings_total,
+        "queued": True,
+        "message": "Scan started in background, check logs for results",
+        "active_alerts": active_count,
     }
