@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -21,10 +22,13 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 
+import { createClient } from "@/lib/supabase/client";
 import { createAnalysis, type Usage } from "@/lib/api";
 
 export default function AnalyzePage() {
   const router = useRouter();
+  const [authChecking, setAuthChecking] = useState(true);
+  const [authed, setAuthed] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [form, setForm] = useState({
@@ -35,12 +39,32 @@ export default function AnalyzePage() {
     duree_credit: 25,
   });
 
+  useEffect(() => {
+    const supabase = createClient();
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!session) {
+        router.push("/login?next=/analyze");
+      } else {
+        setAuthed(true);
+        setAuthChecking(false);
+      }
+    });
+  }, [router]);
+
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
     setLoading(true);
     try {
-      const res = await createAnalysis(form);
+      const supabase = createClient();
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (!session) {
+        router.push("/login?next=/analyze");
+        return;
+      }
+      const res = await createAnalysis(form, session.access_token);
       router.push(`/analyses/${res.id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Erreur inconnue");
@@ -48,23 +72,42 @@ export default function AnalyzePage() {
     }
   }
 
+  if (authChecking) {
+    return (
+      <main className="max-w-2xl mx-auto px-6 py-16 text-center">
+        <p className="text-muted-foreground">Vérification de la session…</p>
+      </main>
+    );
+  }
+
+  if (!authed) return null;
+
   return (
     <main className="max-w-2xl mx-auto px-6 py-12">
-      <Card>
+      <div className="mb-4">
+        <Link
+          href="/"
+          className="text-sm text-muted-foreground hover:text-foreground"
+        >
+          ← Accueil
+        </Link>
+      </div>
+
+      <Card className="glass">
         <CardHeader>
-          <CardTitle>Nouvelle analyse</CardTitle>
+          <CardTitle className="text-2xl">Nouvelle analyse</CardTitle>
           <CardDescription>
-            Le scraping + l&apos;analyse complète prennent 10 à 15 secondes.
+            Le scraping + l&apos;analyse + le conseil IA prennent 10-15 secondes.
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <form onSubmit={onSubmit} className="space-y-6">
+          <form onSubmit={onSubmit} className="space-y-5">
             <div className="space-y-2">
               <Label htmlFor="url">URL Immoweb</Label>
               <Input
                 id="url"
                 type="url"
-                placeholder="https://www.immoweb.be/fr/annonce/..."
+                placeholder="https://www.immoweb.be/fr/annonce/…"
                 value={form.url}
                 onChange={(e) => setForm({ ...form, url: e.target.value })}
                 required
@@ -112,9 +155,7 @@ export default function AnalyzePage() {
                 <Label htmlFor="usage">Usage prévu</Label>
                 <Select
                   value={form.usage}
-                  onValueChange={(v) =>
-                    setForm({ ...form, usage: v as Usage })
-                  }
+                  onValueChange={(v) => setForm({ ...form, usage: v as Usage })}
                   disabled={loading}
                 >
                   <SelectTrigger id="usage">
@@ -122,17 +163,17 @@ export default function AnalyzePage() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="habitation_propre_unique">
-                      Habitation propre (3% droits, 90% quotité max)
+                      Habitation propre (3 % droits, 90 % quotité)
                     </SelectItem>
                     <SelectItem value="investissement_locatif">
-                      Investissement locatif (12,5% droits, 80% quotité)
+                      Investissement locatif (12,5 % droits, 80 % quotité)
                     </SelectItem>
                   </SelectContent>
                 </Select>
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="duree">Durée crédit (ans)</Label>
+                <Label htmlFor="duree">Durée crédit</Label>
                 <Select
                   value={String(form.duree_credit)}
                   onValueChange={(v) =>
@@ -167,13 +208,8 @@ export default function AnalyzePage() {
             >
               {loading
                 ? "Analyse en cours (10-15s)…"
-                : "Lancer l'analyse"}
+                : "🚀 Lancer l'analyse"}
             </Button>
-
-            <p className="text-xs text-muted-foreground text-center">
-              Aucune donnée enregistrée — les analyses sont en mémoire et
-              perdues au redémarrage du serveur (Supabase à venir).
-            </p>
           </form>
         </CardContent>
       </Card>
