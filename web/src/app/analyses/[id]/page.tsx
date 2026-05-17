@@ -127,7 +127,18 @@ export default async function AnalysisPage({ params }: Props) {
   const aParams = analyse.params as Params;
   const invest = analyse.investissement_total as number;
   const prixNegocie = analyse.prix_negocie as number;
-  const totaux = analyse.totaux as Totaux;
+  // Defensive : si totaux pas dans la DB (analyses pre-v0.4), on calcule on the fly
+  const rawTotaux = analyse.totaux as Totaux | undefined;
+  const computedTotalRemboursement =
+    financement.mensualite * 12 * financement.duree_annees;
+  const computedTotalInterets =
+    computedTotalRemboursement - financement.montant_emprunte;
+  const totaux: Totaux = rawTotaux ?? {
+    total_remboursement: computedTotalRemboursement,
+    total_interets_banque: computedTotalInterets,
+    cout_total_acquisition_25ans:
+      prixNegocie + frais.total_frais + travaux.total_net + computedTotalInterets,
+  };
   const aiAdvice = analyse.ai_advice as string | undefined;
 
   const interets_mois_1 = amort[0]?.interets_annuels
