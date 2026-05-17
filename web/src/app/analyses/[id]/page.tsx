@@ -1,7 +1,6 @@
 import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
 
-import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import {
   Card,
@@ -16,16 +15,14 @@ import { getAnalysis, type Usage } from "@/lib/api";
 
 import { NegotiationSimulator } from "./negotiation";
 import { PhotoUploader } from "./photos";
-import { ScoreGauge } from "@/components/charts/score-gauge";
 import { AmortizationChart } from "@/components/charts/amortization-chart";
 import { CashflowChart } from "@/components/charts/cashflow-chart";
 import { MonthlyBreakdownChart } from "@/components/charts/monthly-breakdown-chart";
+import { CostBreakdownChart } from "@/components/charts/cost-breakdown-chart";
 import { PrintButton } from "@/components/print-button";
 
 type Props = { params: Promise<{ id: string }> };
 
-type Verdict = { titre: string; couleur: "vert" | "ambre" | "rouge"; texte: string };
-type Score = { total: number; details: Record<string, number> };
 type Financement = {
   apport: number;
   montant_emprunte: number;
@@ -37,6 +34,14 @@ type Financement = {
   quotite_acceptable: boolean;
   ratio_effort_pct: number;
 };
+type FraisAcq = {
+  prix_achat: number;
+  droits_enregistrement: number;
+  frais_notaire: number;
+  frais_hypotheque: number;
+  total_frais: number;
+  total_acquisition: number;
+};
 type Travaux = {
   postes: Record<string, number>;
   sous_total: number;
@@ -44,6 +49,7 @@ type Travaux = {
   total_brut: number;
   primes_wallonie_estimees: number;
   total_net: number;
+  user_provided?: boolean;
 };
 type Scenario = {
   nom: string;
@@ -57,12 +63,6 @@ type Marche = {
   prix_moyen_m2: number;
   prix_bien_m2: number;
   decote_vs_marche_pct: number;
-};
-type StressTest = {
-  base: { mensualite: number; ratio_effort: number; couverture_loyer: number };
-  taux_plus_1pct: { mensualite: number; ratio_effort: number };
-  taux_plus_2pct: { mensualite: number; ratio_effort: number };
-  vacance_15pct: { loyer_net: number; cash_flow_vs_mensualite: number };
 };
 type ProjectionRow = {
   annee: number;
@@ -86,66 +86,15 @@ type Params = {
   duree_credit: number;
   prix_negocie: number | null;
 };
+type Totaux = {
+  total_remboursement: number;
+  total_interets_banque: number;
+  cout_total_acquisition_25ans: number;
+};
 
 function fmt(value: number | null | undefined, suffix = " EUR"): string {
   if (value === null || value === undefined) return "—";
-  return value.toLocaleString("fr-BE") + suffix;
-}
-
-function computeAdvice(
-  verdict: Verdict,
-  financement: Financement,
-  travaux: Travaux,
-  prixNegocie: number,
-  invest: number,
-  params: Params,
-): { title: string; actions: string[] } | null {
-  if (verdict.couleur === "rouge" && !financement.quotite_acceptable) {
-    const maxQuotite = params.usage === "habitation_propre_unique" ? 0.9 : 0.8;
-    const valGarantie = prixNegocie + travaux.total_net;
-    const maxEmprunt = valGarantie * maxQuotite;
-    const apportNeeded = Math.ceil(invest - maxEmprunt);
-    const apportMissing = Math.max(0, apportNeeded - financement.apport);
-    const prixCible = Math.max(
-      30000,
-      Math.round((prixNegocie - apportMissing) / 1000) * 1000,
-    );
-
-    return {
-      title: "Comment débloquer ce bien",
-      actions: [
-        `Atteindre ${fmt(apportNeeded)} d'apport (il te manque ${fmt(apportMissing)})`,
-        `Ou négocier le prix d'achat vers ${fmt(prixCible)} (simulateur dispo plus bas)`,
-        params.usage === "investissement_locatif"
-          ? "Ou ré-analyser en habitation propre (plafond quotité 90 % au lieu de 80 %)"
-          : "Ou viser un bien moins cher",
-      ],
-    };
-  }
-
-  if (verdict.couleur === "ambre" && financement.ratio_effort_pct > 35) {
-    return {
-      title: "Comment alléger la charge mensuelle",
-      actions: [
-        `Augmenter la durée du crédit (de ${financement.duree_annees} à 30 ans si possible)`,
-        "Augmenter l'apport pour réduire le montant emprunté",
-        "Négocier le prix à la baisse",
-      ],
-    };
-  }
-
-  if (verdict.couleur === "vert") {
-    return {
-      title: "Tu es bien positionné — passe à l'action",
-      actions: [
-        "Visite le bien rapidement (un bien à ce niveau ne reste pas sur le marché)",
-        "Prépare ton dossier banque (bulletins de paie, relevés, contrat)",
-        "Fais une offre d'achat formalisée via l'agent immobilier",
-      ],
-    };
-  }
-
-  return null;
+  return Math.round(value).toLocaleString("fr-BE") + suffix;
 }
 
 export default async function AnalysisPage({ params }: Props) {
@@ -168,46 +117,34 @@ export default async function AnalysisPage({ params }: Props) {
   }
 
   const { listing, analyse } = analysis;
-  const verdict = analyse.verdict as Verdict;
-  const score = analyse.score as Score;
   const financement = analyse.financement as Financement;
+  const frais = analyse.frais_acquisition as FraisAcq;
   const travaux = analyse.travaux as Travaux;
   const scenarios = analyse.scenarios as Record<string, Scenario>;
   const marche = analyse.marche as Marche;
-  const stress = analyse.stress_test as StressTest;
   const projection = analyse.projection_locative_10ans as ProjectionRow[];
   const amort = analyse.tableau_amortissement as AmortRow[];
   const aParams = analyse.params as Params;
   const invest = analyse.investissement_total as number;
   const prixNegocie = analyse.prix_negocie as number;
+  const totaux = analyse.totaux as Totaux;
   const aiAdvice = analyse.ai_advice as string | undefined;
-
-  const advice = computeAdvice(
-    verdict,
-    financement,
-    travaux,
-    prixNegocie,
-    invest,
-    aParams,
-  );
-
-  const verdictBg =
-    verdict.couleur === "vert"
-      ? "bg-green-50 border-green-300 text-green-950 dark:bg-green-950/30 dark:border-green-800 dark:text-green-100"
-      : verdict.couleur === "ambre"
-        ? "bg-amber-50 border-amber-300 text-amber-950 dark:bg-amber-950/30 dark:border-amber-800 dark:text-amber-100"
-        : "bg-red-50 border-red-300 text-red-950 dark:bg-red-950/30 dark:border-red-800 dark:text-red-100";
-
-  const scenarioBest = Math.max(
-    ...Object.values(scenarios).map((s) => s.rendement_net_pct ?? 0),
-  );
 
   const interets_mois_1 = amort[0]?.interets_annuels
     ? amort[0].interets_annuels / 12
     : 0;
 
+  // Cash-out le jour de la signature (hors travaux qui peuvent etre etales)
+  const cashOutSignature = prixNegocie + frais.total_frais;
+  const aEmprunter = financement.montant_emprunte;
+
+  const usagePlafond = aParams.usage === "habitation_propre_unique" ? 90 : 80;
+  const quotiteOK = financement.quotite_pct <= usagePlafond;
+  const ratioOK = financement.ratio_effort_pct <= 33;
+
   return (
     <main className="max-w-6xl mx-auto px-6 py-8 space-y-6">
+      {/* HEADER */}
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">
@@ -235,6 +172,7 @@ export default async function AnalysisPage({ params }: Props) {
         </div>
       </div>
 
+      {/* IA COACH */}
       {aiAdvice && (
         <Card className="border-2 border-primary/30 bg-gradient-to-br from-primary/5 via-transparent to-chart-2/5">
           <CardHeader className="pb-3">
@@ -245,7 +183,7 @@ export default async function AnalysisPage({ params }: Props) {
               <div>
                 <CardTitle className="text-xl">Ton coach IA</CardTitle>
                 <CardDescription>
-                  Conseils personnalisés générés pour CE bien et TON profil
+                  Conseils personnalisés pour CE bien et TON profil
                 </CardDescription>
               </div>
             </div>
@@ -258,40 +196,95 @@ export default async function AnalysisPage({ params }: Props) {
         </Card>
       )}
 
-      <Card className={`${verdictBg} border-2`}>
-        <CardHeader>
-          <div className="flex items-start justify-between gap-6">
-            <div className="flex-1">
-              <CardTitle className="text-2xl">{verdict.titre}</CardTitle>
-              <CardDescription className="text-base mt-2 text-inherit/80">
-                {verdict.texte}
-              </CardDescription>
-            </div>
-            <div className="shrink-0 w-28 sm:w-36">
-              <ScoreGauge score={score.total} />
-            </div>
-          </div>
-        </CardHeader>
-        {advice && (
-          <CardContent className="border-t pt-4 border-current/20">
-            <div className="font-semibold mb-2">→ {advice.title}</div>
-            <ul className="space-y-1 text-sm">
-              {advice.actions.map((action, i) => (
-                <li key={i} className="flex gap-2">
-                  <span className="text-current/60 shrink-0">•</span>
-                  <span>{action}</span>
-                </li>
-              ))}
-            </ul>
+      {/* SYNTHESE FINANCIERE - les 2 cartes clés cote a cote */}
+      <div className="grid md:grid-cols-2 gap-6">
+        {/* CASH-OUT SIGNATURE */}
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-lg">À débourser le jour J</CardTitle>
+            <CardDescription>
+              Ce que tu sors de poche au moment de la signature notaire
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-1 text-sm">
+            <Row label="Prix d'achat" value={fmt(prixNegocie)} />
+            <Row
+              label={`Droits enregistrement (${aParams.usage === "habitation_propre_unique" ? "3 %" : "12,5 %"})`}
+              value={fmt(frais.droits_enregistrement)}
+            />
+            <Row label="Frais notaire" value={fmt(frais.frais_notaire)} />
+            <Row label="Frais hypothèque" value={fmt(frais.frais_hypotheque)} />
+            <div className="border-t border-border my-2"></div>
+            <Row
+              label="Total cash-out signature"
+              value={fmt(cashOutSignature)}
+              highlight
+            />
+            <Row
+              label="Ton apport"
+              value={`- ${fmt(aParams.apport)}`}
+            />
+            <Row
+              label="Crédit hypothécaire"
+              value={fmt(aEmprunter)}
+              highlight
+            />
+            {travaux.total_net > 0 && (
+              <p className="text-xs text-muted-foreground pt-3">
+                + {fmt(travaux.total_net)} de travaux (étalables après l&apos;achat)
+              </p>
+            )}
           </CardContent>
-        )}
-      </Card>
+        </Card>
 
+        {/* COUT LONG TERME */}
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-lg">
+              Coût sur {financement.duree_annees} ans
+            </CardTitle>
+            <CardDescription>
+              Total que tu auras vraiment payé à la fin du crédit
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-1 text-sm">
+            <Row
+              label="Mensualité"
+              value={`${fmt(financement.mensualite)}/mois`}
+              highlight
+            />
+            <Row
+              label="Taux fixe appliqué"
+              value={`${(financement.taux_applique * 100).toFixed(2)} %`}
+            />
+            <Row
+              label={`Total remboursé (${financement.duree_annees * 12} mensualités)`}
+              value={fmt(totaux.total_remboursement)}
+            />
+            <Row
+              label="Intérêts payés à la banque"
+              value={fmt(totaux.total_interets_banque)}
+            />
+            <div className="border-t border-border my-2"></div>
+            <Row
+              label="Coût total acquisition"
+              value={fmt(totaux.cout_total_acquisition_25ans)}
+              highlight
+            />
+            <p className="text-xs text-muted-foreground pt-3">
+              Ratio d&apos;effort : {financement.ratio_effort_pct} % du revenu
+              net mensuel
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* SIMULATEUR */}
       <Card>
         <CardHeader>
           <CardTitle>Simuler une négociation</CardTitle>
           <CardDescription>
-            Change le prix d&apos;achat pour voir l&apos;impact sur le verdict.
+            Change le prix d&apos;achat, relance l&apos;analyse instantanément.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -302,46 +295,38 @@ export default async function AnalysisPage({ params }: Props) {
             usage={aParams.usage}
             duree_credit={aParams.duree_credit}
             currentPrice={prixNegocie}
+            travaux_budget={travaux.user_provided ? travaux.total_net : null}
           />
         </CardContent>
       </Card>
 
-      <div className="grid lg:grid-cols-2 gap-6">
+      {/* GRAPHIQUES - 2x2 grid */}
+      <div className="grid md:grid-cols-2 gap-6">
         <Card>
-          <CardHeader>
-            <CardTitle>Financement</CardTitle>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base">Coût total décomposé</CardTitle>
+            <CardDescription>
+              Où vont les EUR sur la durée totale du crédit
+            </CardDescription>
           </CardHeader>
-          <CardContent className="space-y-1.5 text-sm">
-            <Row label="Investissement total" value={fmt(invest)} />
-            <Row label="Apport" value={fmt(financement.apport)} />
-            <Row label="À emprunter" value={fmt(financement.montant_emprunte)} />
-            <Row
-              label="Taux appliqué"
-              value={`${(financement.taux_applique * 100).toFixed(2)} %`}
-            />
-            <Row label="Durée" value={`${financement.duree_annees} ans`} />
-            <Row
-              label="Mensualité"
-              value={`${fmt(financement.mensualite)}/mois`}
-              highlight
-            />
-            <Row
-              label="Ratio d'effort"
-              value={`${financement.ratio_effort_pct} %`}
-            />
-            <Row
-              label="Quotité"
-              value={`${financement.quotite_pct} % ${financement.quotite_acceptable ? "✓ OK" : "✗ trop élevée"}`}
-              highlight
+          <CardContent>
+            <CostBreakdownChart
+              prix={prixNegocie}
+              frais={frais.total_frais}
+              travaux={travaux.total_net}
+              interets={totaux.total_interets_banque}
             />
           </CardContent>
         </Card>
 
         <Card>
-          <CardHeader>
-            <CardTitle>Mensualité : où va ton argent ?</CardTitle>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base">
+              Mensualité : capital vs intérêts
+            </CardTitle>
             <CardDescription>
-              Décomposition au premier mois (capital vs intérêts banque)
+              Décomposition du 1er mois — l&apos;équilibre s&apos;inverse avec
+              le temps
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -354,17 +339,89 @@ export default async function AnalysisPage({ params }: Props) {
       </div>
 
       <Card>
-        <CardHeader>
-          <CardTitle>Marché — {marche.ville || "?"}</CardTitle>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base">
+            Amortissement du crédit sur {financement.duree_annees} ans
+          </CardTitle>
+          <CardDescription>
+            Capital restant dû, capital remboursé cumulé, intérêts payés cumulés
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <AmortizationChart rows={amort} />
+        </CardContent>
+      </Card>
+
+      {/* BON A SAVOIR - section informative neutre */}
+      <Card className="border-dashed border-2 bg-secondary/30">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base">Bon à savoir avant ta banque</CardTitle>
+          <CardDescription>
+            Repères BNB et financement — informationnel, pas bloquant. Certaines
+            banques sont plus souples que ces seuils.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="grid sm:grid-cols-2 gap-4 text-sm">
+            <div className="flex items-start gap-2">
+              <span
+                className={`mt-0.5 size-2 rounded-full shrink-0 ${
+                  quotiteOK ? "bg-green-500" : "bg-amber-500"
+                }`}
+              />
+              <div>
+                <div className="font-medium">
+                  Quotité : {financement.quotite_pct} % (plafond BNB{" "}
+                  {usagePlafond} % pour ton usage)
+                </div>
+                <div className="text-muted-foreground text-xs mt-1">
+                  {quotiteOK
+                    ? "Tu es sous le plafond BNB, ton dossier passe en général sans souci."
+                    : `Tu dépasses le plafond. Solutions : plus d'apport (~${fmt(
+                        Math.ceil(
+                          invest -
+                            (prixNegocie + travaux.total_net) *
+                              (usagePlafond / 100),
+                        ),
+                      )} requis pour passer), prix négocié plus bas, ou banque avec quotité plus haute (avec surtaux).`}
+                </div>
+              </div>
+            </div>
+            <div className="flex items-start gap-2">
+              <span
+                className={`mt-0.5 size-2 rounded-full shrink-0 ${
+                  ratioOK ? "bg-green-500" : "bg-amber-500"
+                }`}
+              />
+              <div>
+                <div className="font-medium">
+                  Ratio d&apos;effort : {financement.ratio_effort_pct} % (cible
+                  ≤ 33 %)
+                </div>
+                <div className="text-muted-foreground text-xs mt-1">
+                  {ratioOK
+                    ? "Charge mensuelle confortable vs tes revenus."
+                    : "Charge mensuelle élevée. Une durée plus longue (30 ans) ferait baisser la mensualité."}
+                </div>
+              </div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* MARCHE */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base">Marché — {marche.ville || "?"}</CardTitle>
           <CardDescription>Comparaison vs prix moyen local</CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="grid sm:grid-cols-3 gap-4">
+          <div className="grid sm:grid-cols-3 gap-3">
             <div className="p-4 rounded-lg bg-secondary">
               <div className="text-xs text-muted-foreground">
                 Prix moyen marché
               </div>
-              <div className="text-2xl font-bold mt-1">
+              <div className="text-xl font-bold mt-1">
                 {marche.prix_moyen_m2}{" "}
                 <span className="text-sm text-muted-foreground font-normal">
                   EUR/m²
@@ -372,10 +429,8 @@ export default async function AnalysisPage({ params }: Props) {
               </div>
             </div>
             <div className="p-4 rounded-lg bg-secondary">
-              <div className="text-xs text-muted-foreground">
-                Prix de ce bien
-              </div>
-              <div className="text-2xl font-bold mt-1">
+              <div className="text-xs text-muted-foreground">Prix de ce bien</div>
+              <div className="text-xl font-bold mt-1">
                 {marche.prix_bien_m2}{" "}
                 <span className="text-sm text-muted-foreground font-normal">
                   EUR/m²
@@ -392,153 +447,136 @@ export default async function AnalysisPage({ params }: Props) {
               <div className="text-xs text-muted-foreground">
                 Décote vs marché
               </div>
-              <div className="text-2xl font-bold mt-1">
+              <div className="text-xl font-bold mt-1">
                 {marche.decote_vs_marche_pct > 0 ? "+" : ""}
                 {marche.decote_vs_marche_pct} %
               </div>
             </div>
           </div>
-          <p className="text-sm text-muted-foreground mt-4">
-            {marche.decote_vs_marche_pct > 20
-              ? "Décote forte — bien probablement à rénover ou quartier moins prisé. Va sur place valider."
-              : marche.decote_vs_marche_pct > 5
-                ? "Décote modérée — bonne opportunité si le bien est en bon état."
-                : marche.decote_vs_marche_pct > -10
-                  ? "Prix dans la fourchette du marché."
-                  : "Prix au-dessus du marché — il faut une raison particulière (vue, jardin exceptionnel…)."}
-          </p>
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Travaux estimés</CardTitle>
-          <CardDescription>
-            Total net après primes Wallonie :{" "}
-            <strong>{fmt(travaux.total_net)}</strong> (
-            {fmt(travaux.primes_wallonie_estimees)} de primes déduites · 15 %
-            réserve imprévus incluse)
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2 text-sm">
-            {Object.entries(travaux.postes || {}).map(([poste, montant]) => (
-              <div
-                key={poste}
-                className="flex justify-between border-b border-border py-1.5"
-              >
-                <span className="text-muted-foreground capitalize">
-                  {poste.replace(/_/g, " ")}
-                </span>
-                <span className="font-medium tabular-nums">{fmt(montant)}</span>
-              </div>
-            ))}
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Scénarios locatifs</CardTitle>
-          <CardDescription>
-            Rendement net après précompte, vacance, gestion, entretien, assurance
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {Object.entries(scenarios).map(([key, sc]) => (
-            <div
-              key={key}
-              className={`border rounded-lg p-4 space-y-3 bg-card ${
-                sc.rendement_net_pct === scenarioBest
-                  ? "border-primary/50 bg-primary/5"
-                  : "border-border"
-              }`}
-            >
-              <div className="flex justify-between items-center">
-                <h3 className="font-semibold text-lg">
-                  {sc.nom}
-                  {sc.rendement_net_pct === scenarioBest && (
-                    <Badge className="ml-2 align-middle">Meilleur</Badge>
-                  )}
-                </h3>
-                <Badge
-                  variant={sc.rendement_net_pct >= 5 ? "default" : "secondary"}
-                  className="text-base px-3 py-1"
-                >
-                  {sc.rendement_net_pct} % net
-                </Badge>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm">
-                <div>
-                  <div className="text-muted-foreground">Loyer mensuel</div>
-                  <div className="font-medium">{fmt(sc.loyer_mensuel)}</div>
+      {/* TRAVAUX (optionnel) */}
+      {travaux.total_net > 0 && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base">
+              Travaux —{" "}
+              {travaux.user_provided ? "ton budget" : "estimation conservatrice"}
+            </CardTitle>
+            <CardDescription>
+              {travaux.user_provided ? (
+                <>
+                  Tu as indiqué <strong>{fmt(travaux.total_net)}</strong>. Pas
+                  de décomposition par poste — tu sais ce que tu fais.
+                </>
+              ) : (
+                <>
+                  Total net après primes :{" "}
+                  <strong>{fmt(travaux.total_net)}</strong> (
+                  {fmt(travaux.primes_wallonie_estimees)} de primes Wallonie
+                  déduites · 15 % réserve imprévus incluse)
+                </>
+              )}
+            </CardDescription>
+          </CardHeader>
+          {!travaux.user_provided &&
+            Object.keys(travaux.postes || {}).length > 0 && (
+              <CardContent>
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2 text-sm">
+                  {Object.entries(travaux.postes).map(([poste, montant]) => (
+                    <div
+                      key={poste}
+                      className="flex justify-between border-b border-border py-1.5"
+                    >
+                      <span className="text-muted-foreground capitalize">
+                        {poste.replace(/_/g, " ")}
+                      </span>
+                      <span className="font-medium tabular-nums">
+                        {fmt(montant)}
+                      </span>
+                    </div>
+                  ))}
                 </div>
-                <div>
-                  <div className="text-muted-foreground">
-                    Cash-flow net annuel
-                  </div>
-                  <div
-                    className={`font-medium ${
-                      sc.cash_flow_net_annuel < 0
-                        ? "text-red-700 dark:text-red-400"
-                        : ""
+                <p className="text-xs text-muted-foreground mt-4">
+                  Estimation conservatrice — tes vrais travaux peuvent être 30
+                  à 50 % moins chers sur un petit bien. Relance l&apos;analyse
+                  en décochant &laquo;&nbsp;estimer auto&nbsp;&raquo; et entre
+                  ton vrai budget.
+                </p>
+              </CardContent>
+            )}
+        </Card>
+      )}
+
+      {/* SCENARIOS LOCATIFS */}
+      {Object.keys(scenarios).length > 0 && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base">Scénarios locatifs</CardTitle>
+            <CardDescription>
+              Rendement net après précompte, vacance, gestion, entretien,
+              assurance
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {Object.entries(scenarios).map(([key, sc]) => (
+              <div
+                key={key}
+                className="border border-border rounded-lg p-4 bg-card"
+              >
+                <div className="flex justify-between items-center mb-3">
+                  <h3 className="font-semibold">{sc.nom}</h3>
+                  <span
+                    className={`text-base font-bold tabular-nums px-2 py-0.5 rounded ${
+                      sc.rendement_net_pct >= 5
+                        ? "bg-green-100 text-green-900 dark:bg-green-950 dark:text-green-100"
+                        : "bg-secondary text-secondary-foreground"
                     }`}
                   >
-                    {fmt(sc.cash_flow_net_annuel)}
-                  </div>
+                    {sc.rendement_net_pct} % net
+                  </span>
                 </div>
-                <div>
-                  <div className="text-muted-foreground">Investissement</div>
-                  <div className="font-medium">
-                    {fmt(sc.investissement_total)}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm">
+                  <div>
+                    <div className="text-muted-foreground">Loyer mensuel</div>
+                    <div className="font-medium">{fmt(sc.loyer_mensuel)}</div>
+                  </div>
+                  <div>
+                    <div className="text-muted-foreground">
+                      Cash-flow net annuel
+                    </div>
+                    <div
+                      className={`font-medium ${
+                        sc.cash_flow_net_annuel < 0
+                          ? "text-red-700 dark:text-red-400"
+                          : ""
+                      }`}
+                    >
+                      {fmt(sc.cash_flow_net_annuel)}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-muted-foreground">Investissement</div>
+                    <div className="font-medium">
+                      {fmt(sc.investissement_total)}
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
-          ))}
-        </CardContent>
-      </Card>
+            ))}
+          </CardContent>
+        </Card>
+      )}
 
+      {/* PROJECTION CASH-FLOW */}
       <Card>
-        <CardHeader>
-          <CardTitle>Stress test du financement</CardTitle>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base">
+            Projection cash-flow locatif 10 ans
+          </CardTitle>
           <CardDescription>
-            Et si les taux montent ? Et si tu as 15 % de vacance locative ?
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-sm">
-            <StressBox
-              title="Base"
-              mensualite={stress.base.mensualite}
-              effort={stress.base.ratio_effort}
-              extra={`Couverture loyer : ${stress.base.couverture_loyer}%`}
-            />
-            <StressBox
-              title="Taux +1 %"
-              mensualite={stress.taux_plus_1pct.mensualite}
-              effort={stress.taux_plus_1pct.ratio_effort}
-            />
-            <StressBox
-              title="Taux +2 %"
-              mensualite={stress.taux_plus_2pct.mensualite}
-              effort={stress.taux_plus_2pct.ratio_effort}
-            />
-            <StressBox
-              title="Vacance 15 %"
-              mensualite={null}
-              effort={null}
-              extra={`Loyer net : ${fmt(stress.vacance_15pct.loyer_net)}/mois · cash-flow vs mensualité : ${fmt(stress.vacance_15pct.cash_flow_vs_mensualite)}`}
-            />
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Projection cash-flow 10 ans</CardTitle>
-          <CardDescription>
-            Scénario locatif unifamilial · indexation loyer 2 %/an
+            Scénario unifamilial · indexation loyer 2 %/an, charges 2,5 %/an
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -546,58 +584,15 @@ export default async function AnalysisPage({ params }: Props) {
         </CardContent>
       </Card>
 
+      {/* PHOTOS RENOVATION IA */}
       <Card>
-        <CardHeader>
-          <CardTitle>Amortissement du crédit sur {financement.duree_annees} ans</CardTitle>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base">
+            Photos &laquo;&nbsp;après rénovation&nbsp;&raquo;
+          </CardTitle>
           <CardDescription>
-            Capital restant dû, capital remboursé cumulé, intérêts payés cumulés
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <AmortizationChart rows={amort} />
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Détail du score sur 100</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <ScoreBar
-            label="Prix /m² vs marché"
-            value={score.details.prix_m2}
-            max={25}
-          />
-          <ScoreBar
-            label="Rendement locatif"
-            value={score.details.rendement}
-            max={30}
-          />
-          <ScoreBar
-            label="État technique"
-            value={score.details.etat_technique}
-            max={20}
-          />
-          <ScoreBar
-            label="Localisation"
-            value={score.details.localisation}
-            max={15}
-          />
-          <ScoreBar
-            label="Potentiel division"
-            value={score.details.potentiel_division}
-            max={10}
-          />
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Photos &quot;après rénovation&quot;</CardTitle>
-          <CardDescription>
-            Génère 6 visuels dans ChatGPT / Bing / Midjourney, puis dépose-les
-            ici. **Sauvegardés** dans ton dossier privé Supabase Storage,
-            accessibles uniquement par toi.
+            Génère 6 visuels dans ChatGPT / Bing / Midjourney, dépose-les ici.
+            Sauvegardés dans ton dossier privé Supabase Storage.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -605,9 +600,10 @@ export default async function AnalysisPage({ params }: Props) {
         </CardContent>
       </Card>
 
+      {/* DETAILS BIEN */}
       <Card>
-        <CardHeader>
-          <CardTitle>Détails du bien</CardTitle>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base">Détails du bien</CardTitle>
         </CardHeader>
         <CardContent className="space-y-1.5 text-sm">
           <Row label="Référence Immoweb" value={listing.reference || "—"} />
@@ -658,80 +654,12 @@ function Row({
 }) {
   return (
     <div
-      className={`flex justify-between py-1 ${
-        highlight ? "font-semibold border-t border-border pt-2 mt-1" : ""
+      className={`flex justify-between py-1 gap-2 ${
+        highlight ? "font-semibold pt-2" : ""
       }`}
     >
       <span className="text-muted-foreground">{label}</span>
       <span className="tabular-nums text-right">{value}</span>
-    </div>
-  );
-}
-
-function StressBox({
-  title,
-  mensualite,
-  effort,
-  extra,
-}: {
-  title: string;
-  mensualite: number | null;
-  effort: number | null;
-  extra?: string;
-}) {
-  return (
-    <div className="border border-border rounded-lg p-3 bg-card">
-      <div className="font-semibold text-sm mb-2">{title}</div>
-      {mensualite !== null && (
-        <div className="flex justify-between text-sm">
-          <span className="text-muted-foreground">Mensualité</span>
-          <span className="tabular-nums">{fmt(mensualite)}</span>
-        </div>
-      )}
-      {effort !== null && (
-        <div className="flex justify-between text-sm">
-          <span className="text-muted-foreground">Ratio effort</span>
-          <span
-            className={`tabular-nums ${
-              effort > 35 ? "text-red-700 dark:text-red-400" : ""
-            }`}
-          >
-            {effort} %
-          </span>
-        </div>
-      )}
-      {extra && (
-        <div className="text-xs mt-2 text-muted-foreground">{extra}</div>
-      )}
-    </div>
-  );
-}
-
-function ScoreBar({
-  label,
-  value,
-  max,
-}: {
-  label: string;
-  value: number;
-  max: number;
-}) {
-  const pct = (value / max) * 100;
-  return (
-    <div className="space-y-1">
-      <div className="flex justify-between text-sm">
-        <span className="text-muted-foreground">{label}</span>
-        <span className="tabular-nums">
-          <strong>{value}</strong>
-          <span className="text-muted-foreground"> / {max}</span>
-        </span>
-      </div>
-      <div className="h-2 bg-secondary rounded-full overflow-hidden">
-        <div
-          className="h-full bg-gradient-to-r from-primary to-chart-2 rounded-full transition-all"
-          style={{ width: `${Math.min(100, Math.max(0, pct))}%` }}
-        />
-      </div>
     </div>
   );
 }

@@ -114,6 +114,23 @@ def estimer_budget_travaux(listing: dict) -> dict:
     }
 
 
+def build_travaux_from_budget(budget: float) -> dict:
+    """Construit un dict travaux compatible quand l'user fournit son propre budget.
+
+    Pas de decomposition par poste : l'user a deja sa propre vision.
+    """
+    budget = float(budget or 0)
+    return {
+        "postes": {},
+        "sous_total": round(budget),
+        "reserve_imprevus": 0,
+        "total_brut": round(budget),
+        "primes_wallonie_estimees": 0,
+        "total_net": round(budget),
+        "user_provided": True,
+    }
+
+
 def calculer_scenarios(listing: dict, travaux: dict, params: dict) -> dict:
     """Calcule jusqu'a 3 scenarios : unifamilial, colocation, division."""
     prix_negocie = params.get("prix_negocie") or listing.get("price") or 0
@@ -309,8 +326,17 @@ def verdict(score: int, analyse: dict) -> dict:
 
 
 def analyze(listing: dict, params: dict) -> dict:
-    """Pipeline d'analyse complet : travaux + scenarios + score + verdict + projection."""
-    travaux = estimer_budget_travaux(listing)
+    """Pipeline d'analyse complet : travaux + scenarios + score + projection.
+
+    Si params['travaux_budget'] est fourni (meme 0), on utilise cette valeur
+    au lieu de l'estimateur conservatif. C'est utile pour l'user qui a deja
+    une idee de son budget travaux apres visite.
+    """
+    user_travaux = params.get("travaux_budget")
+    if user_travaux is not None:
+        travaux = build_travaux_from_budget(user_travaux)
+    else:
+        travaux = estimer_budget_travaux(listing)
     scenarios = calculer_scenarios(listing, travaux, params)
 
     city_key = get_city_key(listing.get("city"))
@@ -331,6 +357,17 @@ def analyze(listing: dict, params: dict) -> dict:
         scenarios["financement"]["duree_annees"],
     )
 
+    # Totaux all-in pour les nouvelles visualisations
+    fin = scenarios["financement"]
+    total_remboursement = fin["mensualite"] * 12 * fin["duree_annees"]
+    total_interets = total_remboursement - fin["montant_emprunte"]
+    cout_total_acquisition_25ans = (
+        scenarios["prix_negocie"]
+        + scenarios["frais_acquisition"]["total_frais"]
+        + travaux["total_net"]
+        + total_interets
+    )
+
     return {
         "params": params,
         "marche": {
@@ -348,4 +385,9 @@ def analyze(listing: dict, params: dict) -> dict:
         "verdict": verd,
         "projection_locative_10ans": projection,
         "tableau_amortissement": amort,
+        "totaux": {
+            "total_remboursement": round(total_remboursement, 2),
+            "total_interets_banque": round(total_interets, 2),
+            "cout_total_acquisition_25ans": round(cout_total_acquisition_25ans, 2),
+        },
     }

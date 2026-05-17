@@ -16,6 +16,16 @@ class AnalysisRequest(BaseModel):
     )
     duree_credit: int = Field(default=25, ge=10, le=30)
     prix_negocie: Optional[float] = Field(default=None, ge=0, le=10_000_000)
+    travaux_budget: Optional[float] = Field(
+        default=None,
+        ge=0,
+        le=1_000_000,
+        description=(
+            "Budget travaux fourni par l'utilisateur. Si None, le systeme "
+            "calcule une estimation conservatrice basee sur PEB + features. "
+            "Si fourni (meme 0), c'est cette valeur qui est utilisee."
+        ),
+    )
 
 
 class ListingSummary(BaseModel):

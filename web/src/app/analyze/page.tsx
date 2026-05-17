@@ -31,12 +31,14 @@ export default function AnalyzePage() {
   const [authed, setAuthed] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [autoTravaux, setAutoTravaux] = useState(true);
   const [form, setForm] = useState({
     url: "",
     revenu_net: 2500,
     apport: 20000,
     usage: "habitation_propre_unique" as Usage,
     duree_credit: 25,
+    travaux_budget: 15000,
   });
 
   useEffect(() => {
@@ -64,7 +66,15 @@ export default function AnalyzePage() {
         router.push("/login?next=/analyze");
         return;
       }
-      const res = await createAnalysis(form, session.access_token);
+      const payload = {
+        url: form.url,
+        revenu_net: form.revenu_net,
+        apport: form.apport,
+        usage: form.usage,
+        duree_credit: form.duree_credit,
+        travaux_budget: autoTravaux ? null : form.travaux_budget,
+      };
+      const res = await createAnalysis(payload, session.access_token);
       router.push(`/analyses/${res.id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Erreur inconnue");
@@ -97,7 +107,7 @@ export default function AnalyzePage() {
         <CardHeader>
           <CardTitle className="text-2xl">Nouvelle analyse</CardTitle>
           <CardDescription>
-            Le scraping + l&apos;analyse + le conseil IA prennent 10-15 secondes.
+            Scraping + analyse + conseil IA : ~10-15 secondes.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -155,7 +165,9 @@ export default function AnalyzePage() {
                 <Label htmlFor="usage">Usage prévu</Label>
                 <Select
                   value={form.usage}
-                  onValueChange={(v) => setForm({ ...form, usage: v as Usage })}
+                  onValueChange={(v) =>
+                    v && setForm({ ...form, usage: v as Usage })
+                  }
                   disabled={loading}
                 >
                   <SelectTrigger id="usage">
@@ -163,10 +175,10 @@ export default function AnalyzePage() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="habitation_propre_unique">
-                      Habitation propre (3 % droits, 90 % quotité)
+                      Habitation propre (3 % droits)
                     </SelectItem>
                     <SelectItem value="investissement_locatif">
-                      Investissement locatif (12,5 % droits, 80 % quotité)
+                      Investissement locatif (12,5 % droits)
                     </SelectItem>
                   </SelectContent>
                 </Select>
@@ -177,7 +189,7 @@ export default function AnalyzePage() {
                 <Select
                   value={String(form.duree_credit)}
                   onValueChange={(v) =>
-                    setForm({ ...form, duree_credit: Number(v) })
+                    v && setForm({ ...form, duree_credit: Number(v) })
                   }
                   disabled={loading}
                 >
@@ -194,21 +206,64 @@ export default function AnalyzePage() {
               </div>
             </div>
 
+            <div className="space-y-3 p-4 rounded-lg border border-border bg-secondary/30">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex-1">
+                  <Label
+                    htmlFor="auto-trv"
+                    className="cursor-pointer text-base font-medium"
+                  >
+                    Estimer les travaux automatiquement
+                  </Label>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    On calcule selon PEB + features détectées. Décoche si tu as
+                    déjà ton budget en tête après visite ou via un devis.
+                  </p>
+                </div>
+                <input
+                  id="auto-trv"
+                  type="checkbox"
+                  className="size-4 mt-1 accent-primary cursor-pointer"
+                  checked={autoTravaux}
+                  onChange={(e) => setAutoTravaux(e.target.checked)}
+                  disabled={loading}
+                />
+              </div>
+
+              {!autoTravaux && (
+                <div className="space-y-2 pt-3 border-t border-border">
+                  <Label htmlFor="travaux">Budget travaux (EUR)</Label>
+                  <Input
+                    id="travaux"
+                    type="number"
+                    min={0}
+                    max={500000}
+                    step={1000}
+                    value={form.travaux_budget}
+                    onChange={(e) =>
+                      setForm({
+                        ...form,
+                        travaux_budget: Number(e.target.value),
+                      })
+                    }
+                    disabled={loading}
+                    placeholder="0 si rien à faire"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Tout inclus : rafraîchissement, cuisine, SDB, énergie, etc.
+                  </p>
+                </div>
+              )}
+            </div>
+
             {error && (
               <div className="p-3 bg-destructive/10 border border-destructive/30 text-destructive rounded-md text-sm">
                 <strong>Erreur :</strong> {error}
               </div>
             )}
 
-            <Button
-              type="submit"
-              disabled={loading}
-              className="w-full"
-              size="lg"
-            >
-              {loading
-                ? "Analyse en cours (10-15s)…"
-                : "🚀 Lancer l'analyse"}
+            <Button type="submit" disabled={loading} className="w-full" size="lg">
+              {loading ? "Analyse en cours (10-15s)…" : "🚀 Lancer l'analyse"}
             </Button>
           </form>
         </CardContent>

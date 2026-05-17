@@ -26,6 +26,8 @@ export type AnalysisRequest = {
   usage: Usage;
   duree_credit?: number;
   prix_negocie?: number | null;
+  /** Budget travaux fourni par l'user. Si undefined/null, le backend estime. Si 0+, on prend cette valeur. */
+  travaux_budget?: number | null;
 };
 
 export type ListingSummary = {

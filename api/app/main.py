@@ -141,6 +141,7 @@ def create_analysis(
         "usage": req.usage,
         "duree_credit": req.duree_credit,
         "prix_negocie": req.prix_negocie,
+        "travaux_budget": req.travaux_budget,
     }
     try:
         analyse_data = analyzer.analyze(listing_raw, params)

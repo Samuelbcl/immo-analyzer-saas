@@ -17,6 +17,8 @@ type Props = {
   usage: Usage;
   duree_credit: number;
   currentPrice: number;
+  /** Si fourni (user a entre son propre budget), on le re-passe au re-simul */
+  travaux_budget: number | null;
 };
 
 export function NegotiationSimulator({
@@ -26,6 +28,7 @@ export function NegotiationSimulator({
   usage,
   duree_credit,
   currentPrice,
+  travaux_budget,
 }: Props) {
   const router = useRouter();
   const [price, setPrice] = useState(currentPrice);
@@ -53,6 +56,7 @@ export function NegotiationSimulator({
           usage,
           duree_credit,
           prix_negocie: price,
+          travaux_budget,
         },
         session.access_token,
       );
