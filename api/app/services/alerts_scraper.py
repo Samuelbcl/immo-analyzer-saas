@@ -7,12 +7,51 @@ Note : Immoweb peut casser ce scraper s'il change sa structure. A surveiller.
 """
 
 import json
+import os
 import re
+from urllib.parse import quote_plus
 
 import requests
 from bs4 import BeautifulSoup
 
 from .scraper import HEADERS
+
+
+SCRAPER_API_KEY = os.getenv("SCRAPER_API_KEY", "")
+
+
+def _fetch_with_fallback(url: str) -> str | None:
+    """Fetch HTML : direct, fallback ScraperAPI si 403."""
+    try:
+        session = requests.Session()
+        session.headers.update(HEADERS)
+        try:
+            session.get("https://www.immoweb.be/", timeout=15)
+        except Exception:
+            pass
+        r = session.get(url, timeout=30, headers={"Referer": "https://www.immoweb.be/"})
+        if r.status_code == 200:
+            return r.text
+        if r.status_code != 403 or not SCRAPER_API_KEY:
+            r.raise_for_status()
+    except requests.HTTPError:
+        if not SCRAPER_API_KEY:
+            return None
+
+    if not SCRAPER_API_KEY:
+        return None
+
+    proxied = (
+        f"http://api.scraperapi.com/?api_key={SCRAPER_API_KEY}"
+        f"&url={quote_plus(url)}&country_code=be&render=false"
+    )
+    try:
+        pr = requests.get(proxied, timeout=120)
+        pr.raise_for_status()
+        return pr.text
+    except Exception as e:
+        print(f"[alerts] ScraperAPI fallback failed: {e}")
+        return None
 
 
 # Mapping de quelques villes -> codes postaux pour Immoweb
@@ -65,24 +104,11 @@ def search_listings(
     """
     url = build_search_url(city, max_price, min_bedrooms, property_type)
 
-    try:
-        session = requests.Session()
-        session.headers.update(HEADERS)
-        # Visite home pour les cookies anti-bot
-        try:
-            session.get("https://www.immoweb.be/", timeout=15)
-        except Exception:
-            pass
-
-        response = session.get(
-            url, timeout=30, headers={"Referer": "https://www.immoweb.be/"}
-        )
-        response.raise_for_status()
-    except Exception as e:
-        print(f"Search scraper failed for {city}: {e}")
+    html = _fetch_with_fallback(url)
+    if not html:
+        print(f"[alerts] Search scraper failed for {city} (direct + ScraperAPI)")
         return []
 
-    html = response.text
     listings = _extract_listings_from_next_data(html)
 
     if not listings:

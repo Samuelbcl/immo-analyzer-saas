@@ -1,10 +1,20 @@
-"""Scraper Immoweb - extrait les donnees structurees d'une annonce."""
+"""Scraper Immoweb - extrait les donnees structurees d'une annonce.
 
+Strategie en 2 etapes :
+  1. Tentative directe avec headers Chrome + session cookies
+  2. Si 403/anti-bot -> fallback via ScraperAPI (residential IPs)
+"""
+
+import os
 import json
 import re
+from urllib.parse import quote_plus
 
 import requests
 from bs4 import BeautifulSoup
+
+
+SCRAPER_API_KEY = os.getenv("SCRAPER_API_KEY", "")
 
 
 HEADERS = {
@@ -36,24 +46,55 @@ HEADERS = {
 def fetch_html(url: str) -> str:
     """Recupere le HTML brut de l'annonce Immoweb.
 
-    Note : depuis un datacenter (Railway, AWS...), Immoweb peut renvoyer 403
-    a cause de la reputation IP. Les headers ci-dessus miment un vrai Chrome
-    pour maximiser les chances. Si 403 persistant, passer a un service de
-    scraping avec IP residentielles (ScraperAPI, ZenRows...).
+    Strategie :
+     1. Essaie en direct avec headers Chrome + session cookies (le moins cher)
+     2. Si 403 (anti-bot detecte IP datacenter) -> fallback ScraperAPI
+
+    Necessite SCRAPER_API_KEY dans l'env pour le fallback. Sans, leve l'erreur 403.
     """
     if not url.startswith("https://www.immoweb.be/"):
         raise ValueError("URL doit etre une annonce Immoweb (https://www.immoweb.be/...)")
-    # Session pour gerer les cookies que Immoweb pose au 1er hit
+
+    # ----- Tentative 1 : direct avec Chrome fingerprint + cookies session
     session = requests.Session()
     session.headers.update(HEADERS)
-    # Visite homepage d'abord pour recuperer les cookies de session
     try:
         session.get("https://www.immoweb.be/", timeout=15)
     except requests.RequestException:
-        pass  # Si la home echoue on tente quand meme l'annonce directe
-    response = session.get(url, timeout=30, headers={"Referer": "https://www.immoweb.be/"})
-    response.raise_for_status()
-    return response.text
+        pass
+
+    try:
+        response = session.get(
+            url, timeout=30, headers={"Referer": "https://www.immoweb.be/"}
+        )
+        if response.status_code == 200:
+            return response.text
+        if response.status_code == 403 and SCRAPER_API_KEY:
+            print(f"[scraper] Direct 403 sur {url}, fallback ScraperAPI...")
+        else:
+            response.raise_for_status()
+    except requests.HTTPError:
+        if not SCRAPER_API_KEY:
+            raise
+
+    # ----- Tentative 2 : ScraperAPI (residential proxy)
+    if not SCRAPER_API_KEY:
+        # Pas de cle, on releve le 403 original
+        raise requests.HTTPError(
+            "403 Client Error: Forbidden for url. "
+            "Configure SCRAPER_API_KEY pour activer le fallback proxy."
+        )
+
+    proxied_url = (
+        f"http://api.scraperapi.com/?api_key={SCRAPER_API_KEY}"
+        f"&url={quote_plus(url)}"
+        f"&country_code=be"  # IPs belges si possible
+        f"&render=false"  # pas de JS rendering, on parse __NEXT_DATA__
+    )
+    proxy_response = requests.get(proxied_url, timeout=120)
+    proxy_response.raise_for_status()
+    print(f"[scraper] ScraperAPI fallback OK ({len(proxy_response.text)} bytes)")
+    return proxy_response.text
 
 
 def extract_classified_json(html: str) -> dict:
