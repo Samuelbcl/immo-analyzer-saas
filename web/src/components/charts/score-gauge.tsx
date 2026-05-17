@@ -18,7 +18,7 @@ export function ScoreGauge({ score }: { score: number }) {
   const data = [{ name: "score", value: score, fill: color }];
 
   return (
-    <div className="relative w-full aspect-square max-w-[200px] mx-auto">
+    <div className="relative w-full aspect-square">
       <ResponsiveContainer width="100%" height="100%">
         <RadialBarChart
           innerRadius="78%"
@@ -41,10 +41,10 @@ export function ScoreGauge({ score }: { score: number }) {
         </RadialBarChart>
       </ResponsiveContainer>
       <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-        <div className="text-5xl font-bold tabular-nums leading-none">
+        <div className="text-3xl sm:text-4xl font-bold tabular-nums leading-none">
           {score}
         </div>
-        <div className="text-xs text-muted-foreground mt-1">/ 100</div>
+        <div className="text-[10px] sm:text-xs text-current/70 mt-0.5">/ 100</div>
       </div>
     </div>
   );

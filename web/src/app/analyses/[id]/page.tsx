@@ -267,7 +267,7 @@ export default async function AnalysisPage({ params }: Props) {
                 {verdict.texte}
               </CardDescription>
             </div>
-            <div className="shrink-0">
+            <div className="shrink-0 w-28 sm:w-36">
               <ScoreGauge score={score.total} />
             </div>
           </div>
