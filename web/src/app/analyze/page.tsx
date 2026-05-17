@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -33,6 +32,7 @@ export default function AnalyzePage() {
     revenu_net: 2500,
     apport: 20000,
     usage: "habitation_propre_unique" as Usage,
+    duree_credit: 25,
   });
 
   async function onSubmit(e: React.FormEvent) {
@@ -50,21 +50,11 @@ export default function AnalyzePage() {
 
   return (
     <main className="max-w-2xl mx-auto px-6 py-12">
-      <div className="mb-6">
-        <Link
-          href="/"
-          className="text-sm text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
-        >
-          ← Retour
-        </Link>
-      </div>
-
       <Card>
         <CardHeader>
           <CardTitle>Nouvelle analyse</CardTitle>
           <CardDescription>
-            Colle l&apos;URL de l&apos;annonce Immoweb et ton profil financier.
-            Le scraping + l&apos;analyse prennent 10 à 15 secondes.
+            Le scraping + l&apos;analyse complète prennent 10 à 15 secondes.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -117,31 +107,54 @@ export default function AnalyzePage() {
               </div>
             </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="usage">Usage prévu</Label>
-              <Select
-                value={form.usage}
-                onValueChange={(v) =>
-                  setForm({ ...form, usage: v as Usage })
-                }
-                disabled={loading}
-              >
-                <SelectTrigger id="usage">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="habitation_propre_unique">
-                    Habitation propre (résidence principale, 3% droits)
-                  </SelectItem>
-                  <SelectItem value="investissement_locatif">
-                    Investissement locatif (12,5% droits)
-                  </SelectItem>
-                </SelectContent>
-              </Select>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="usage">Usage prévu</Label>
+                <Select
+                  value={form.usage}
+                  onValueChange={(v) =>
+                    setForm({ ...form, usage: v as Usage })
+                  }
+                  disabled={loading}
+                >
+                  <SelectTrigger id="usage">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="habitation_propre_unique">
+                      Habitation propre (3% droits, 90% quotité max)
+                    </SelectItem>
+                    <SelectItem value="investissement_locatif">
+                      Investissement locatif (12,5% droits, 80% quotité)
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="duree">Durée crédit (ans)</Label>
+                <Select
+                  value={String(form.duree_credit)}
+                  onValueChange={(v) =>
+                    setForm({ ...form, duree_credit: Number(v) })
+                  }
+                  disabled={loading}
+                >
+                  <SelectTrigger id="duree">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="15">15 ans</SelectItem>
+                    <SelectItem value="20">20 ans</SelectItem>
+                    <SelectItem value="25">25 ans</SelectItem>
+                    <SelectItem value="30">30 ans</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
 
             {error && (
-              <div className="p-3 bg-red-50 border border-red-200 text-red-800 rounded-md text-sm dark:bg-red-950 dark:border-red-900 dark:text-red-200">
+              <div className="p-3 bg-destructive/10 border border-destructive/30 text-destructive rounded-md text-sm">
                 <strong>Erreur :</strong> {error}
               </div>
             )}
@@ -153,9 +166,14 @@ export default function AnalyzePage() {
               size="lg"
             >
               {loading
-                ? "Analyse en cours (10-15s)..."
+                ? "Analyse en cours (10-15s)…"
                 : "Lancer l'analyse"}
             </Button>
+
+            <p className="text-xs text-muted-foreground text-center">
+              Aucune donnée enregistrée — les analyses sont en mémoire et
+              perdues au redémarrage du serveur (Supabase à venir).
+            </p>
           </form>
         </CardContent>
       </Card>
