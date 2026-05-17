@@ -165,3 +165,98 @@
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
 }
+
+/* ---------- PRINT / PDF EXPORT ---------- */
+@media print {
+  @page {
+    size: A4;
+    margin: 1.5cm 1.2cm;
+  }
+
+  /* Force background colors et gradient text to print */
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* Hide nav, header, action buttons, interactive things */
+  header,
+  nav,
+  .print\:hidden,
+  button:not(.print-keep),
+  a[class*="button"],
+  form,
+  [role="navigation"] {
+    display: none !important;
+  }
+
+  /* White background for print, dark text */
+  html,
+  body {
+    background: white !important;
+    color: black !important;
+    font-size: 11pt;
+  }
+
+  /* Container - remove max-width constraints */
+  main {
+    max-width: 100% !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  /* Cards - lighter borders, no shadow, white bg */
+  [class*="rounded"],
+  [class*="border"] {
+    box-shadow: none !important;
+  }
+
+  /* Page break avoidance inside cards */
+  .card,
+  [class*="Card"] > div,
+  div[class*="border"][class*="rounded"] {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  /* Headings start on new page if too close to bottom */
+  h1,
+  h2,
+  h3 {
+    page-break-after: avoid;
+    break-after: avoid;
+  }
+
+  /* Tables - dont break in middle */
+  table,
+  tr,
+  td,
+  th {
+    page-break-inside: avoid;
+  }
+
+  /* Hide details we don't need on paper */
+  .glass {
+    background: white !important;
+    backdrop-filter: none !important;
+  }
+
+  /* Score gauge - keep colors */
+  svg {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* Add page footer with brand */
+  body::after {
+    content: "immo-analyzer — rapport généré le " attr(data-printed);
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    text-align: center;
+    font-size: 9pt;
+    color: #94a3b8;
+    padding: 4px;
+  }
+}

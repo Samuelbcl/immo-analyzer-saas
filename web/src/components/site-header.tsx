@@ -10,7 +10,7 @@ export async function SiteHeader() {
   } = await supabase.auth.getUser();
 
   return (
-    <header className="border-b border-border bg-background/70 backdrop-blur-md sticky top-0 z-10">
+    <header className="border-b border-border bg-background/70 backdrop-blur-md sticky top-0 z-10 print:hidden">
       <div className="max-w-6xl mx-auto px-6 py-3 flex items-center justify-between">
         <Link
           href="/"
@@ -29,6 +29,12 @@ export async function SiteHeader() {
                 Mes analyses
               </Link>
               <Link
+                href="/mes-alertes"
+                className="hidden sm:inline text-sm text-muted-foreground hover:text-foreground transition-colors px-2"
+              >
+                Alertes
+              </Link>
+              <Link
                 href="/analyze"
                 className="text-sm text-muted-foreground hover:text-foreground transition-colors px-2"
               >
@@ -37,14 +43,12 @@ export async function SiteHeader() {
               <UserMenu email={user.email ?? ""} />
             </>
           ) : (
-            <>
-              <Link
-                href="/login"
-                className="text-sm text-muted-foreground hover:text-foreground transition-colors px-2"
-              >
-                Connexion
-              </Link>
-            </>
+            <Link
+              href="/login"
+              className="text-sm text-muted-foreground hover:text-foreground transition-colors px-2"
+            >
+              Connexion
+            </Link>
           )}
           <ThemeToggle />
         </div>

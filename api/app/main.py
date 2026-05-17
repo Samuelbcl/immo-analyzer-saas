@@ -3,13 +3,14 @@
 import os
 import uuid
 from datetime import datetime, timezone
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
 
 from app.models import AnalysisRequest, AnalysisResponse, ListingSummary
-from app.services import ai_advisor, analyzer, scraper
+from app.services import ai_advisor, alerts_scraper, analyzer, email_sender, scraper
 from app.services.supabase_client import (
     get_admin_client,
     get_user_client,
@@ -18,8 +19,8 @@ from app.services.supabase_client import (
 
 app = FastAPI(
     title="immo-analyzer-api",
-    version="0.3.0",
-    description="Backend API pour l'analyse d'investissement immobilier locatif belge",
+    version="0.4.0",
+    description="Backend API immo-analyzer-saas (Supabase + OpenAI + Resend)",
 )
 
 _origins_env = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000")
@@ -33,9 +34,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+CRON_SECRET = os.getenv("CRON_SECRET", "")
+
 
 def _extract_jwt(authorization: str | None) -> str | None:
-    """Extrait le JWT de l'header Authorization: Bearer <token>."""
     if not authorization:
         return None
     parts = authorization.split()
@@ -44,17 +46,24 @@ def _extract_jwt(authorization: str | None) -> str | None:
     return None
 
 
+def _require_user(authorization: str | None) -> tuple[str, str]:
+    """Retourne (jwt, user_id) ou raise 401."""
+    jwt = _extract_jwt(authorization)
+    if not jwt:
+        raise HTTPException(status_code=401, detail="Authentification requise.")
+    admin = get_admin_client()
+    user_id = get_user_id_from_jwt(admin, jwt)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="JWT invalide ou expire.")
+    return jwt, user_id
+
+
 def _clean_listing(raw: dict) -> dict:
-    """Sanitize raw scraper output : '' -> None."""
     field_names = set(ListingSummary.model_fields.keys())
     return {k: (None if v == "" else v) for k, v in raw.items() if k in field_names}
 
 
 def _row_to_response(row: dict) -> dict:
-    """Map row Postgres -> AnalysisResponse JSON.
-
-    DB column 'analysis_data' (reserved keyword workaround) -> API field 'analyse'.
-    """
     return {
         "id": row["id"],
         "url": row["url"],
@@ -64,11 +73,39 @@ def _row_to_response(row: dict) -> dict:
     }
 
 
+# ----- Models -----
+
+
+class AlertRequest(BaseModel):
+    label: str | None = Field(default=None, max_length=120)
+    city: str = Field(min_length=2, max_length=80)
+    max_price: int = Field(ge=10000, le=5_000_000)
+    min_bedrooms: int = Field(default=1, ge=0, le=10)
+    property_type: Literal[
+        "maison", "appartement", "maison-et-appartement"
+    ] = "maison-et-appartement"
+    active: bool = True
+
+
+class AlertResponse(BaseModel):
+    id: str
+    label: str | None
+    city: str
+    max_price: int
+    min_bedrooms: int
+    property_type: str
+    active: bool
+    created_at: str
+
+
+# ----- Endpoints generaux -----
+
+
 @app.get("/")
 def root():
     return {
         "name": "immo-analyzer-api",
-        "version": "0.3.0",
+        "version": "0.4.0",
         "status": "running",
         "docs": "/docs",
     }
@@ -79,30 +116,16 @@ def health():
     return {"status": "ok"}
 
 
+# ----- Endpoints analyses -----
+
+
 @app.post("/api/analyses", response_model=AnalysisResponse)
 def create_analysis(
     req: AnalysisRequest,
     authorization: Annotated[str | None, Header()] = None,
 ) -> AnalysisResponse:
-    """Scrape Immoweb + analyse + (auth requise) sauvegarde Postgres.
+    jwt, user_id = _require_user(authorization)
 
-    Genere aussi un conseil IA en parallele via OpenAI (best effort, ne bloque
-    pas si la cle API absente).
-    """
-    jwt = _extract_jwt(authorization)
-    if not jwt:
-        raise HTTPException(
-            status_code=401,
-            detail="Authentification requise. Connecte-toi via /login.",
-        )
-
-    # Verifie le JWT et recupere le user_id
-    admin = get_admin_client()
-    user_id = get_user_id_from_jwt(admin, jwt)
-    if not user_id:
-        raise HTTPException(status_code=401, detail="JWT invalide ou expire.")
-
-    # Scraping Immoweb
     try:
         listing_raw = scraper.fetch_listing(str(req.url))
     except ValueError as e:
@@ -112,7 +135,6 @@ def create_analysis(
             status_code=502, detail=f"Erreur scraping Immoweb : {e}"
         )
 
-    # Calculs financiers
     params = {
         "revenu_net": req.revenu_net,
         "apport": req.apport,
@@ -125,7 +147,6 @@ def create_analysis(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erreur analyse : {e}")
 
-    # IA Coach (best effort, optionnel)
     try:
         advice = ai_advisor.generate_advice(listing_raw, analyse_data)
         if advice:
@@ -134,8 +155,6 @@ def create_analysis(
         print(f"AI advice generation failed (non-blocking) : {e}")
 
     listing_clean = _clean_listing(listing_raw)
-
-    # Persistance via user client (RLS applique)
     user_client = get_user_client(jwt)
     aid = str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat()
@@ -169,11 +188,7 @@ def get_analysis(
     analysis_id: str,
     authorization: Annotated[str | None, Header()] = None,
 ) -> AnalysisResponse:
-    """Recupere une analyse. RLS garantit que l'user ne voit que les siennes."""
-    jwt = _extract_jwt(authorization)
-    if not jwt:
-        raise HTTPException(status_code=401, detail="Authentification requise.")
-
+    jwt, _ = _require_user(authorization)
     user_client = get_user_client(jwt)
     try:
         result = (
@@ -196,11 +211,7 @@ def get_analysis(
 def list_analyses(
     authorization: Annotated[str | None, Header()] = None,
 ) -> list[dict]:
-    """Liste les analyses de l'utilisateur connecte (RLS auto-filtre)."""
-    jwt = _extract_jwt(authorization)
-    if not jwt:
-        raise HTTPException(status_code=401, detail="Authentification requise.")
-
+    jwt, _ = _require_user(authorization)
     user_client = get_user_client(jwt)
     try:
         result = (
@@ -222,7 +233,9 @@ def list_analyses(
             "price": (r.get("listing") or {}).get("price"),
             "city": (r.get("listing") or {}).get("city"),
             "verdict": (r.get("analysis_data") or {}).get("verdict", {}).get("titre"),
-            "verdict_color": (r.get("analysis_data") or {}).get("verdict", {}).get("couleur"),
+            "verdict_color": (r.get("analysis_data") or {})
+            .get("verdict", {})
+            .get("couleur"),
             "score": (r.get("analysis_data") or {}).get("score", {}).get("total"),
             "created_at": r["created_at"],
         }
@@ -235,14 +248,193 @@ def delete_analysis(
     analysis_id: str,
     authorization: Annotated[str | None, Header()] = None,
 ):
-    """Supprime une analyse (RLS verifie que c'est bien la sienne)."""
-    jwt = _extract_jwt(authorization)
-    if not jwt:
-        raise HTTPException(status_code=401, detail="Authentification requise.")
-
+    jwt, _ = _require_user(authorization)
     user_client = get_user_client(jwt)
     try:
         user_client.table("analyses").delete().eq("id", analysis_id).execute()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erreur DB : {e}")
     return {"deleted": analysis_id}
+
+
+# ----- Endpoints alertes email -----
+
+
+@app.post("/api/alerts", response_model=AlertResponse)
+def create_alert(
+    req: AlertRequest,
+    authorization: Annotated[str | None, Header()] = None,
+) -> AlertResponse:
+    jwt, user_id = _require_user(authorization)
+    user_client = get_user_client(jwt)
+    aid = str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+
+    row = {
+        "id": aid,
+        "user_id": user_id,
+        "label": req.label or f"{req.city} < {req.max_price:,} EUR".replace(",", " "),
+        "city": req.city.lower().strip(),
+        "max_price": req.max_price,
+        "min_bedrooms": req.min_bedrooms,
+        "property_type": req.property_type,
+        "active": req.active,
+        "created_at": now,
+    }
+    try:
+        user_client.table("user_alerts").insert(row).execute()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erreur DB : {e}")
+
+    return AlertResponse(**row)
+
+
+@app.get("/api/alerts")
+def list_alerts(
+    authorization: Annotated[str | None, Header()] = None,
+) -> list[AlertResponse]:
+    jwt, _ = _require_user(authorization)
+    user_client = get_user_client(jwt)
+    try:
+        result = (
+            user_client.table("user_alerts")
+            .select("*")
+            .order("created_at", desc=True)
+            .execute()
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erreur DB : {e}")
+    return [AlertResponse(**r) for r in (result.data or [])]
+
+
+@app.patch("/api/alerts/{alert_id}")
+def update_alert(
+    alert_id: str,
+    payload: dict,
+    authorization: Annotated[str | None, Header()] = None,
+):
+    """Update partiel (typiquement active true/false)."""
+    jwt, _ = _require_user(authorization)
+    user_client = get_user_client(jwt)
+    try:
+        user_client.table("user_alerts").update(payload).eq(
+            "id", alert_id
+        ).execute()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erreur DB : {e}")
+    return {"updated": alert_id}
+
+
+@app.delete("/api/alerts/{alert_id}")
+def delete_alert(
+    alert_id: str,
+    authorization: Annotated[str | None, Header()] = None,
+):
+    jwt, _ = _require_user(authorization)
+    user_client = get_user_client(jwt)
+    try:
+        user_client.table("user_alerts").delete().eq("id", alert_id).execute()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erreur DB : {e}")
+    return {"deleted": alert_id}
+
+
+# ----- Cron job pour les alertes -----
+
+
+@app.post("/api/cron/check-alerts")
+def check_alerts(
+    authorization: Annotated[str | None, Header()] = None,
+) -> dict:
+    """Endpoint cron : verifier les alertes actives et envoyer les emails.
+
+    Securise par un header Authorization: Bearer <CRON_SECRET>.
+    A trigger via Railway cron / cron-job.org / Vercel cron quotidiennement.
+    """
+    token = _extract_jwt(authorization)
+    if not CRON_SECRET or token != CRON_SECRET:
+        raise HTTPException(status_code=403, detail="Secret cron invalide.")
+
+    admin = get_admin_client()
+
+    # Recupere toutes les alertes actives
+    try:
+        alerts_res = (
+            admin.table("user_alerts").select("*").eq("active", True).execute()
+        )
+    except Exception as e:
+        return {"error": f"DB read alerts: {e}", "processed": 0}
+
+    alerts = alerts_res.data or []
+    processed = 0
+    emails_sent = 0
+    new_listings_total = 0
+
+    for alert in alerts:
+        # Recupere user email
+        try:
+            user = admin.auth.admin.get_user_by_id(alert["user_id"]).user
+            user_email = user.email if user else None
+        except Exception:
+            user_email = None
+        if not user_email:
+            continue
+
+        # Search Immoweb
+        listings = alerts_scraper.search_listings(
+            alert["city"],
+            alert["max_price"],
+            alert["min_bedrooms"],
+            alert["property_type"],
+        )
+
+        # Filtre les biens deja notifies
+        try:
+            notified_rows = (
+                admin.table("alert_notifications")
+                .select("listing_url")
+                .eq("alert_id", alert["id"])
+                .execute()
+            )
+            already_notified = {r["listing_url"] for r in (notified_rows.data or [])}
+        except Exception:
+            already_notified = set()
+
+        new_listings = [
+            l for l in listings if l["url"] not in already_notified
+        ][:10]  # max 10 par email
+
+        if not new_listings:
+            processed += 1
+            continue
+
+        # Insert notifications
+        for listing in new_listings:
+            try:
+                admin.table("alert_notifications").insert(
+                    {
+                        "alert_id": alert["id"],
+                        "user_id": alert["user_id"],
+                        "listing_url": listing["url"],
+                        "listing_reference": listing.get("reference"),
+                        "listing_price": listing.get("price"),
+                        "listing_address": listing.get("address"),
+                    }
+                ).execute()
+            except Exception:
+                pass
+
+        # Envoie email
+        sent = email_sender.send_alert_email(
+            user_email, alert.get("label", "alerte"), new_listings
+        )
+        if sent:
+            emails_sent += 1
+        new_listings_total += len(new_listings)
+        processed += 1
+
+    return {
+        "processed_alerts": processed,
+        "emails_sent": emails_sent,
+        "new_listings_total": new_listings_total,
+    }

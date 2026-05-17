@@ -20,6 +20,7 @@ import { ScoreGauge } from "@/components/charts/score-gauge";
 import { AmortizationChart } from "@/components/charts/amortization-chart";
 import { CashflowChart } from "@/components/charts/cashflow-chart";
 import { MonthlyBreakdownChart } from "@/components/charts/monthly-breakdown-chart";
+import { PrintButton } from "@/components/print-button";
 
 type Props = { params: Promise<{ id: string }> };
 
@@ -220,7 +221,8 @@ export default async function AnalysisPage({ params }: Props) {
             {listing.year_built && ` · ${listing.year_built}`}
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap print:hidden">
+          <PrintButton />
           <Link
             href="/mes-analyses"
             className={buttonVariants({ variant: "outline" })}
