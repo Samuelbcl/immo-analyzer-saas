@@ -9,19 +9,49 @@ from bs4 import BeautifulSoup
 
 HEADERS = {
     "User-Agent": (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/121.0.0.0 Safari/537.36"
+        "Chrome/131.0.0.0 Safari/537.36"
     ),
-    "Accept-Language": "fr-BE,fr;q=0.9,en;q=0.8",
+    "Accept": (
+        "text/html,application/xhtml+xml,application/xml;q=0.9,"
+        "image/avif,image/webp,image/apng,*/*;q=0.8,"
+        "application/signed-exchange;v=b3;q=0.7"
+    ),
+    "Accept-Language": "fr-BE,fr;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Accept-Encoding": "gzip, deflate, br, zstd",
+    "Cache-Control": "max-age=0",
+    "Sec-Ch-Ua": '"Chromium";v="131", "Not_A Brand";v="24"',
+    "Sec-Ch-Ua-Mobile": "?0",
+    "Sec-Ch-Ua-Platform": '"Windows"',
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1",
+    "Priority": "u=0, i",
 }
 
 
 def fetch_html(url: str) -> str:
-    """Recupere le HTML brut de l'annonce Immoweb."""
+    """Recupere le HTML brut de l'annonce Immoweb.
+
+    Note : depuis un datacenter (Railway, AWS...), Immoweb peut renvoyer 403
+    a cause de la reputation IP. Les headers ci-dessus miment un vrai Chrome
+    pour maximiser les chances. Si 403 persistant, passer a un service de
+    scraping avec IP residentielles (ScraperAPI, ZenRows...).
+    """
     if not url.startswith("https://www.immoweb.be/"):
         raise ValueError("URL doit etre une annonce Immoweb (https://www.immoweb.be/...)")
-    response = requests.get(url, headers=HEADERS, timeout=30)
+    # Session pour gerer les cookies que Immoweb pose au 1er hit
+    session = requests.Session()
+    session.headers.update(HEADERS)
+    # Visite homepage d'abord pour recuperer les cookies de session
+    try:
+        session.get("https://www.immoweb.be/", timeout=15)
+    except requests.RequestException:
+        pass  # Si la home echoue on tente quand meme l'annonce directe
+    response = session.get(url, timeout=30, headers={"Referer": "https://www.immoweb.be/"})
     response.raise_for_status()
     return response.text
 
