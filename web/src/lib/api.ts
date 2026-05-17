@@ -1,10 +1,25 @@
 /**
  * Client API pour le backend FastAPI immo-analyzer.
  *
- * Base URL controlled by NEXT_PUBLIC_API_URL (default localhost:8000 in dev).
+ * Pattern : single-origin du point de vue utilisateur.
+ * - Cote browser (Client Component) : fetch sur URL RELATIVE "/api/*"
+ *   Next.js (config rewrites) proxifie vers le backend Railway en transparence.
+ *   L'utilisateur voit toujours son domaine principal dans la barre d'adresse.
+ * - Cote serveur (Server Component / Route Handler) : fetch sur URL ABSOLUE
+ *   vers BACKEND_API_URL (variable d'env serveur, non exposee au client).
+ *
+ * BACKEND_API_URL est defini :
+ * - en local dans web/.env.local (defaut http://localhost:8000)
+ * - en prod dans Vercel Settings -> Environment Variables
  */
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+function apiUrl(path: string): string {
+  if (typeof window === "undefined") {
+    const base = process.env.BACKEND_API_URL || "http://localhost:8000";
+    return `${base}${path}`;
+  }
+  return path;
+}
 
 // ----- Types -----
 
@@ -50,7 +65,7 @@ export type AnalysisResponse = {
 // ----- Calls -----
 
 export async function createAnalysis(req: AnalysisRequest): Promise<AnalysisResponse> {
-  const res = await fetch(`${API_BASE}/api/analyses`, {
+  const res = await fetch(apiUrl("/api/analyses"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(req),
@@ -71,7 +86,7 @@ export async function createAnalysis(req: AnalysisRequest): Promise<AnalysisResp
 }
 
 export async function getAnalysis(id: string): Promise<AnalysisResponse> {
-  const res = await fetch(`${API_BASE}/api/analyses/${id}`, {
+  const res = await fetch(apiUrl(`/api/analyses/${id}`), {
     cache: "no-store",
   });
 

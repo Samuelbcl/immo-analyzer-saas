@@ -1,5 +1,6 @@
 """FastAPI entry point pour immo-analyzer-saas."""
 
+import os
 import uuid
 from datetime import datetime, timezone
 
@@ -15,9 +16,16 @@ app = FastAPI(
     description="Backend API pour l'analyse d'investissement immobilier locatif belge",
 )
 
+# CORS : en architecture proxifiee (Next.js rewrites -> Railway), les requetes
+# arrivent server-to-server donc CORS ne s'applique pas. On garde quand meme
+# une liste pour le dev local et les appels browser-direct au cas ou.
+# Override via env var ALLOWED_ORIGINS="https://foo.com,https://bar.com" en prod.
+_origins_env = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000")
+ALLOWED_ORIGINS = [o.strip() for o in _origins_env.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
